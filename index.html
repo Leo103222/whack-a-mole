@@ -1,0 +1,248 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>嚇鼠了神敲敲遊戲系統</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body {
+      background: linear-gradient(to bottom, #4ade80, #16a34a);
+      overflow: hidden;
+      cursor: none;
+    }
+    .hole {
+      width: 80px;
+      height: 80px;
+      background: #1f2937;
+      border-radius: 50%;
+      position: relative;
+      overflow: hidden;
+    }
+    .gopher {
+      width: 60px;
+      height: 60px;
+      position: absolute;
+      bottom: -60px;
+      left: 50%;
+      transform: translateX(-50%);
+      transition: bottom 0.3s;
+    }
+    .gopher.up {
+      bottom: 10px;
+    }
+    .hammer {
+      width: 60px;
+      height: 60px;
+      position: fixed;
+      pointer-events: none;
+      transform: translate(-50%, -50%);
+      transition: transform 0.1s;
+    }
+    .hammer.active {
+      transform: translate(-50%, -50%) scale(0.8) rotate(45deg);
+    }
+  </style>
+</head>
+<body class="flex flex-col items-center justify-center min-h-screen text-white">
+  <h1 class="text-4xl font-bold mb-6">嚇鼠了神敲敲遊戲系統</h1>
+  <div id="scoreBoard" class="mb-4 text-xl">
+    分數: <span id="score">0</span> | 剩餘時間: <span id="time">60</span> 秒
+  </div>
+  <div id="difficultyDisplay" class="mb-4 text-lg hidden">
+    當前難度: <span id="currentDifficulty">一般</span>
+  </div>
+  <div id="difficultySelect" class="mb-6 flex space-x-4">
+    <button id="easyButton" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded">簡單</button>
+    <button id="normalButton" class="bg-yellow-600 hover:bg-yellow-700 text-white font-bold py-2 px-4 rounded">一般</button>
+    <button id="hardButton" class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded">困難</button>
+  </div>
+  <button id="startButton" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded mb-6 hidden">
+    開始遊戲
+  </button>
+  <div id="gameBoard" class="grid gap-4"></div>
+  <img src="image/hammer.png" id="hammer" class="hammer" alt="Hammer">
+
+  <script>
+    const gameBoard = document.getElementById('gameBoard');
+    const scoreDisplay = document.getElementById('score');
+    const timeDisplay = document.getElementById('time');
+    const startButton = document.getElementById('startButton');
+    const hammer = document.getElementById('hammer');
+    const difficultySelect = document.getElementById('difficultySelect');
+    const difficultyDisplay = document.getElementById('difficultyDisplay');
+    const currentDifficulty = document.getElementById('currentDifficulty');
+    const easyButton = document.getElementById('easyButton');
+    const normalButton = document.getElementById('normalButton');
+    const hardButton = document.getElementById('hardButton');
+    let score = 0;
+    let timeLeft = 60;
+    let gameActive = false;
+    let timerId = null;
+    let gopherTimerId = null;
+    let currentDifficultySettings = null;
+
+    // 難度設定
+    const difficulties = {
+      easy: {
+        name: '簡單',
+        gridSize: 3,
+        popIntervalMin: 1500,
+        popIntervalMax: 2500,
+        stayTime: 1200
+      },
+      normal: {
+        name: '一般',
+        gridSize: 4,
+        popIntervalMin: 1000,
+        popIntervalMax: 2000,
+        stayTime: 1000
+      },
+      hard: {
+        name: '困難',
+        gridSize: 5,
+        popIntervalMin: 800,
+        popIntervalMax: 1500,
+        stayTime: 800
+      }
+    };
+
+    // 滑鼠移動時槌子跟隨
+    document.addEventListener('mousemove', (e) => {
+      hammer.style.left = `${e.clientX}px`;
+      hammer.style.top = `${e.clientY}px`;
+    });
+
+    // 觸控設備支援
+    document.addEventListener('touchmove', (e) => {
+      const touch = e.touches[0];
+      hammer.style.left = `${touch.clientX}px`;
+      hammer.style.top = `${touch.clientY}px`;
+    });
+
+    // 動態生成遊戲網格
+    function createGrid(gridSize) {
+      gameBoard.innerHTML = '';
+      gameBoard.className = `grid gap-4 grid-cols-${gridSize}`;
+      for (let i = 0; i < gridSize * gridSize; i++) {
+        const hole = document.createElement('div');
+        hole.className = 'hole';
+        const gopher = document.createElement('img');
+        gopher.src = 'image/gopher.png';
+        gopher.className = 'gopher';
+        gopher.alt = 'Gopher';
+        hole.appendChild(gopher);
+        gameBoard.appendChild(hole);
+      }
+      // 為新生成的地鼠添加點擊事件
+      document.querySelectorAll('.gopher').forEach(gopher => {
+        gopher.addEventListener('click', () => {
+          if (gameActive && gopher.classList.contains('up')) {
+            score += 10;
+            scoreDisplay.textContent = score;
+            gopher.classList.remove('up');
+            hammer.classList.add('active');
+            setTimeout(() => hammer.classList.remove('active'), 100);
+          }
+        });
+      });
+    }
+
+    // 隨機讓地鼠冒出
+    function popGopher() {
+      if (!gameActive) return;
+      const gophers = document.querySelectorAll('.gopher');
+      const randomIndex = Math.floor(Math.random() * gophers.length);
+      const gopher = gophers[randomIndex];
+      gopher.classList.add('up');
+      setTimeout(() => {
+        gopher.classList.remove('up');
+      }, currentDifficultySettings.stayTime);
+      const nextPop = Math.random() * (currentDifficultySettings.popIntervalMax - currentDifficultySettings.popIntervalMin) + currentDifficultySettings.popIntervalMin;
+      gopherTimerId = setTimeout(popGopher, nextPop);
+    }
+
+    // 倒數計時
+    function startTimer() {
+      timerId = setInterval(() => {
+        timeLeft--;
+        timeDisplay.textContent = timeLeft;
+        if (timeLeft <= 0) {
+          endGame();
+        }
+      }, 1000);
+    }
+
+    // 結束遊戲
+    function endGame() {
+      gameActive = false;
+      clearInterval(timerId);
+      clearTimeout(gopherTimerId);
+      document.querySelectorAll('.gopher').forEach(gopher => gopher.classList.remove('up'));
+      alert(`遊戲結束！難度：${currentDifficultySettings.name}，您的分數是：${score}`);
+      difficultySelect.classList.remove('hidden');
+      difficultyDisplay.classList.add('hidden');
+    }
+
+    // 開始遊戲
+    function startGame(difficulty) {
+      gameActive = true;
+      score = 0;
+      timeLeft = 60;
+      scoreDisplay.textContent = score;
+      timeDisplay.textContent = timeLeft;
+      currentDifficultySettings = difficulties[difficulty];
+      currentDifficulty.textContent = currentDifficultySettings.name;
+      difficultySelect.classList.add('hidden');
+      difficultyDisplay.classList.remove('hidden');
+      createGrid(currentDifficultySettings.gridSize);
+      startTimer();
+      popGopher();
+    }
+
+    // 難度按鈕事件
+    easyButton.addEventListener('click', () => startGame('easy'));
+    normalButton.addEventListener('click', () => startGame('normal'));
+    hardButton.addEventListener('click', () => startGame('hard'));
+  </script>
+</body>
+</html>
